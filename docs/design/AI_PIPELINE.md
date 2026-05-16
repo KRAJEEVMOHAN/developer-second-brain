@@ -45,3 +45,11 @@ The retrieval pipeline fetches relevant context for user queries to power the ch
 - **Future Enhancements:**
   - **Recency Boost:** Boost scores for chunks from recently modified files.
   - **Keyword Match Boost:** Combine vector search with BM25 keyword search (Hybrid Search) to ensure exact terms are matched.
+
+## 7. Citation Generation
+To ensure the answers are trustworthy and verifiable, the system generates citations for the source code used.
+1. **Metadata Tracking:** Each code chunk is stored with its file path and line number range.
+2. **Context Tagging:** When injected into the prompt, each chunk is prefixed with its source (e.g., `[File: src/auth.js:10-25]`).
+3. **LLM Instruction:** The LLM is instructed to use these tags to reference the sources in its response.
+4. **Extraction:** The backend parses the LLM response to extract citations and returns them in a structured array alongside the message.
+

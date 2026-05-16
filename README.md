@@ -143,7 +143,7 @@ Redis
 
 ### Backend
 
-- Go
+- Node.js
 
 ### Database
 
