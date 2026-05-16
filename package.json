@@ -1,0 +1,7 @@
+{
+  "name": "developer-second-brain",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ]
+}
