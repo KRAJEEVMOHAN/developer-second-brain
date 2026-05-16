@@ -79,7 +79,7 @@ This document outlines the software requirements for the AI Developer Second Bra
 ## 5. Constraints
 - **CON-1:** The parsing engine must use Tree-sitter.
 - **CON-2:** The database must use PostgreSQL with the pgvector extension.
-- **CON-3:** The backend must be built using Go.
+- **CON-3:** The backend must be built using Node.js.
 - **CON-4:** The frontend must use React, TypeScript, and Tailwind CSS.
 
 ## 6. Assumptions

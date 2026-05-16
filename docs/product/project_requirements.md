@@ -132,7 +132,7 @@ Reliability: - Retry handling - Queue processing
 
 Frontend: - React - TypeScript - Tailwind
 
-Backend: - Go services
+Backend: - Node.js services
 
 Infrastructure: - PostgreSQL - pgvector - Redis
 
