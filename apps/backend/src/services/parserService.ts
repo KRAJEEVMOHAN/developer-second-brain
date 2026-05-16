@@ -58,7 +58,15 @@ export class ParserService {
       'build',
       '.vscode',
       'package-lock.json',
-      'yarn.lock'
+      'yarn.lock',
+      '.png',
+      '.jpg',
+      '.jpeg',
+      '.gif',
+      '.ico',
+      '.pdf',
+      '.zip',
+      '.gz'
     ];
     
     return ignorePatterns.some(pattern => filePath.includes(pattern));
