@@ -87,10 +87,17 @@ function App() {
   const [files, setFiles] = useState<string[]>([])
   const [symbols, setSymbols] = useState<any[]>([])
   const [relationships, setRelationships] = useState<any[]>([])
-  const [sidebarTab, setSidebarTab] = useState<'context' | 'relationships' | 'quality'>('context')
+  const [sidebarTab, setSidebarTab] = useState<'context' | 'relationships' | 'quality' | 'memory'>('context')
   const [selectedFileContent, setSelectedFileContent] = useState<string | null>(null)
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
   const [showGraph, setShowGraph] = useState(false)
+
+  const [memories, setMemories] = useState<any[]>([])
+  const [searchMemoryQuery, setSearchMemoryQuery] = useState('')
+  const [newMemoryTitle, setNewMemoryTitle] = useState('')
+  const [newMemoryContent, setNewMemoryContent] = useState('')
+  const [newMemoryType, setNewMemoryType] = useState('decision')
+  const [showAddMemoryModal, setShowAddMemoryModal] = useState(false)
 
   const handleFileClick = (path: string) => {
     setSelectedFilePath(path);
@@ -98,6 +105,54 @@ function App() {
       .then(res => res.json())
       .then(data => setSelectedFileContent(data.content))
       .catch(err => console.error('Failed to fetch file content:', err))
+  }
+
+  const handleSearchMemory = (query: string, repoId = activeRepo?.id) => {
+    setSearchMemoryQuery(query)
+    if (!repoId) return
+    const url = query
+      ? `${API_URL}/repositories/${repoId}/memories?q=${encodeURIComponent(query)}`
+      : `${API_URL}/repositories/${repoId}/memories`
+    fetch(url)
+      .then(res => res.json())
+      .then(data => setMemories(data))
+      .catch(err => console.error('Failed to search memories:', err))
+  }
+
+  const handleCreateMemory = () => {
+    if (!newMemoryTitle || !newMemoryContent || !newMemoryType || !activeRepo) return
+
+    fetch(`${API_URL}/repositories/${activeRepo.id}/memories`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: newMemoryTitle,
+        content: newMemoryContent,
+        type: newMemoryType
+      })
+    })
+      .then(res => res.json())
+      .then(() => {
+        handleSearchMemory(searchMemoryQuery)
+        setNewMemoryTitle('')
+        setNewMemoryContent('')
+        setNewMemoryType('decision')
+        setShowAddMemoryModal(false)
+      })
+      .catch(err => console.error('Failed to create memory:', err))
+  }
+
+  const handleDeleteMemory = (memoryId: string) => {
+    if (!activeRepo) return
+
+    fetch(`${API_URL}/repositories/${activeRepo.id}/memories/${memoryId}`, {
+      method: 'DELETE'
+    })
+      .then(res => res.json())
+      .then(() => {
+        handleSearchMemory(searchMemoryQuery)
+      })
+      .catch(err => console.error('Failed to delete memory:', err))
   }
 
   const generateMermaid = () => {
@@ -229,6 +284,12 @@ function App() {
       .then(res => res.json())
       .then(data => setRelationships(data))
       .catch(err => console.error('Failed to fetch relationships:', err))
+
+    // Fetch memories for the active repository
+    fetch(`${API_URL}/repositories/${repo.id}/memories`)
+      .then(res => res.json())
+      .then(data => setMemories(data))
+      .catch(err => console.error('Failed to fetch memories:', err))
   }
 
   return (
@@ -421,6 +482,13 @@ function App() {
                   >
                     Quality
                   </button>
+                  <button
+                    className={`btn btn-text`}
+                    onClick={() => setSidebarTab('memory')}
+                    style={{ color: sidebarTab === 'memory' ? 'var(--accent)' : 'var(--text-secondary)', fontWeight: sidebarTab === 'memory' ? 'bold' : 'normal', padding: '0.5rem' }}
+                  >
+                    Memory
+                  </button>
                 </div>
 
                 {sidebarTab === 'context' ? (
@@ -467,7 +535,7 @@ function App() {
                       )}
                     </div>
                   </div>
-                ) : (
+                ) : sidebarTab === 'quality' ? (
                   <div className="quality-report">
                     <h3>Code Quality</h3>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxHeight: 'calc(100vh - 250px)', overflowY: 'auto' }}>
@@ -502,6 +570,58 @@ function App() {
 
                     </div>
                   </div>
+                ) : (
+                  <div className="memory-tab">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                      <h3 style={{ margin: 0 }}>Team Memory</h3>
+                      <button 
+                        className="btn btn-primary" 
+                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                        onClick={() => setShowAddMemoryModal(true)}
+                      >
+                        + Add
+                      </button>
+                    </div>
+
+                    <div className="memory-search-bar">
+                      <input
+                        type="text"
+                        placeholder="Search memories semantically..."
+                        value={searchMemoryQuery}
+                        onChange={(e) => handleSearchMemory(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="memories-container">
+                      {memories.length > 0 ? (
+                        memories.map((mem) => (
+                          <div key={mem.id} className="memory-card">
+                            <div className="memory-card-header">
+                              <span className={`memory-badge badge-${mem.type}`}>
+                                {mem.type}
+                              </span>
+                              <button 
+                                className="btn-delete-memory"
+                                onClick={() => handleDeleteMemory(mem.id)}
+                                title="Delete Memory"
+                              >
+                                🗑️
+                              </button>
+                            </div>
+                            <div className="memory-title">{mem.title}</div>
+                            <div className="memory-content">{mem.content}</div>
+                            <div className="memory-footer">
+                              <span>📅 {new Date(mem.created_at).toLocaleDateString()}</span>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', textAlign: 'center', marginTop: '2rem' }}>
+                          No team memories stored yet.
+                        </p>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
@@ -533,6 +653,65 @@ function App() {
             <div className="modal-actions">
               <button className="btn btn-secondary" onClick={() => setShowImportModal(false)}>Cancel</button>
               <button className="btn btn-primary" onClick={handleImport}>Start Import</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Memory Modal */}
+      {showAddMemoryModal && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h2>Add Team Memory</h2>
+            <div className="form-group">
+              <label>Title</label>
+              <input
+                type="text"
+                placeholder="e.g. Switched to Postgres"
+                value={newMemoryTitle}
+                onChange={(e) => setNewMemoryTitle(e.target.value)}
+              />
+            </div>
+            <div className="form-group">
+              <label>Type</label>
+              <select value={newMemoryType} onChange={(e) => setNewMemoryType(e.target.value)}>
+                <option value="decision">Decision</option>
+                <option value="note">Note</option>
+                <option value="migration">Migration</option>
+                <option value="meeting">Meeting Summary</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Content</label>
+              <textarea
+                placeholder="Describe the decision, note, migration reason, or meeting summary..."
+                rows={4}
+                value={newMemoryContent}
+                onChange={(e) => setNewMemoryContent(e.target.value)}
+                style={{
+                  backgroundColor: 'var(--bg-primary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '6px',
+                  color: 'var(--text-primary)',
+                  padding: '0.75rem',
+                  fontFamily: 'inherit',
+                  resize: 'vertical'
+                }}
+              ></textarea>
+            </div>
+            <div className="modal-actions">
+              <button 
+                className="btn btn-secondary" 
+                onClick={() => {
+                  setShowAddMemoryModal(false);
+                  setNewMemoryTitle('');
+                  setNewMemoryContent('');
+                  setNewMemoryType('decision');
+                }}
+              >
+                Cancel
+              </button>
+              <button className="btn btn-primary" onClick={handleCreateMemory}>Save Memory</button>
             </div>
           </div>
         </div>

@@ -7,6 +7,7 @@ import { ParserService } from './services/parserService';
 import { ChunkingService } from './services/chunkingService';
 import { EmbeddingService } from './services/embeddingService';
 import { StructureService } from './services/structureService';
+import { GitService } from './services/gitService';
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -49,6 +50,7 @@ const parserService = new ParserService();
 const chunkingService = new ChunkingService();
 const embeddingService = new EmbeddingService();
 const structureService = new StructureService();
+const gitService = new GitService();
 
 // Import Repository
 app.post('/api/v1/repositories', async (req: Request, res: Response) => {
@@ -71,11 +73,12 @@ app.post('/api/v1/repositories', async (req: Request, res: Response) => {
       [id, name.substring(0, 255), url.substring(0, 255), 'processing']
     );
 
-    // Simulate background processing
-    const repoPath = path.resolve(__dirname, '../../..'); // Root of workspace
-    console.log(`Starting parse for ${name} at ${repoPath}`);
+    const repoPath = path.resolve(__dirname, '../repos', id);
+    console.log(`Starting clone & parse for ${name} at ${repoPath}`);
     
-    parserService.parseRepository(repoPath)
+    // Run cloning and then parsing in the background
+    gitService.cloneRepository(url, repoPath, branch)
+      .then(() => parserService.parseRepository(repoPath))
       .then(async files => {
         console.log(`Parsed ${files.length} files for ${name}`);
         
@@ -265,6 +268,88 @@ app.get('/api/v1/repositories/:id/relationships', async (req: Request, res: Resp
   }
 });
 
+// List or Search Team Memories
+app.get('/api/v1/repositories/:id/memories', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const query = req.query.q as string;
+
+  try {
+    if (query) {
+      const embedding = await embeddingService.generateEmbedding(query);
+      const vectorStr = `[${embedding.join(',')}]`;
+      const result = await pool.query(
+        `SELECT id, title, content, type, created_at,
+                (embedding <=> $2) as distance
+         FROM team_memories
+         WHERE repo_id = $1
+         ORDER BY distance ASC
+         LIMIT 10`,
+        [id, vectorStr]
+      );
+      res.json(result.rows);
+    } else {
+      const result = await pool.query(
+        'SELECT id, title, content, type, created_at FROM team_memories WHERE repo_id = $1 ORDER BY created_at DESC',
+        [id]
+      );
+      res.json(result.rows);
+    }
+  } catch (err) {
+    console.error('Failed to fetch memories:', err);
+    res.status(500).json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch memories' }
+    });
+  }
+});
+
+// Create Team Memory
+app.post('/api/v1/repositories/:id/memories', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { title, content, type } = req.body;
+
+  if (!title || !content || !type) {
+    return res.status(400).json({
+      error: { code: 'INVALID_INPUT', message: 'Title, content, and type are required' }
+    });
+  }
+
+  try {
+    const textToEmbed = `${title} ${content}`;
+    const embedding = await embeddingService.generateEmbedding(textToEmbed);
+    const vectorStr = `[${embedding.join(',')}]`;
+
+    const result = await pool.query(
+      'INSERT INTO team_memories (repo_id, title, content, type, embedding) VALUES ($1, $2, $3, $4, $5) RETURNING id, title, content, type, created_at',
+      [id, title, content, type, vectorStr]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Failed to create memory:', err);
+    res.status(500).json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to create memory' }
+    });
+  }
+});
+
+// Delete Team Memory
+app.delete('/api/v1/repositories/:id/memories/:memoryId', async (req: Request, res: Response) => {
+  const { id, memoryId } = req.params;
+
+  try {
+    await pool.query(
+      'DELETE FROM team_memories WHERE repo_id = $1 AND id = $2',
+      [id, memoryId]
+    );
+    res.json({ message: 'Memory deleted successfully' });
+  } catch (err) {
+    console.error('Failed to delete memory:', err);
+    res.status(500).json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to delete memory' }
+    });
+  }
+});
+
 // Get File Content
 app.get('/api/v1/repositories/:id/file', async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -277,8 +362,9 @@ app.get('/api/v1/repositories/:id/file', async (req: Request, res: Response) => 
   }
   
   try {
-    const repoPath = path.resolve(__dirname, '../../..');
-    const fullPath = path.join(repoPath, filePath);
+    const reposDir = path.resolve(__dirname, '../repos');
+    const repoPath = path.resolve(reposDir, id);
+    const fullPath = path.resolve(repoPath, filePath);
     
     if (!fullPath.startsWith(repoPath)) {
       return res.status(403).json({
@@ -341,6 +427,25 @@ app.post('/api/v1/chat', async (req: Request, res: Response) => {
     const embedding = await embeddingService.generateEmbedding(message);
     const vectorStr = `[${embedding.join(',')}]`;
 
+    // Search for similar memories using pgvector
+    const memoriesResult = await pool.query(
+      `SELECT title, content, type,
+              (embedding <=> $2) as distance
+       FROM team_memories
+       WHERE repo_id = $1
+       ORDER BY distance ASC
+       LIMIT 3`,
+      [repo_id, vectorStr]
+    );
+
+    const memoryCitations = memoriesResult.rows
+      .filter(row => row.distance < 1.6) // Only include memories that are reasonably close
+      .map(row => ({
+        file: `[Memory] ${row.type.toUpperCase()}: ${row.title}`,
+        lines: '1-1',
+        content: row.content
+      }));
+
     // Search for similar chunks using pgvector
     const result = await pool.query(
       `SELECT file_path, content, start_line, end_line, 
@@ -358,13 +463,13 @@ app.post('/api/v1/chat', async (req: Request, res: Response) => {
       content: row.content
     }));
 
-    // Combine citations (symbols first)
-    const citations = [...symbolCitations, ...vectorCitations].slice(0, 5);
+    // Combine citations: symbols, then memories, then code snippets
+    const citations = [...symbolCitations, ...memoryCitations, ...vectorCitations].slice(0, 5);
 
     const conversation_id = Math.random().toString(36).substr(2, 9);
     
     res.json({
-      response: `I found ${symbolCitations.length} matching symbols and ${result.rows.length} relevant snippets.`,
+      response: `I found ${symbolCitations.length} matching symbols, ${memoryCitations.length} relevant memories, and ${result.rows.length} relevant snippets.`,
       conversation_id,
       citations: citations
     });

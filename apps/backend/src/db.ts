@@ -66,6 +66,19 @@ export async function initDb() {
       );
     `);
     
+    // Create team_memories table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS team_memories (
+        id SERIAL PRIMARY KEY,
+        repo_id VARCHAR(50) REFERENCES repositories(id) ON DELETE CASCADE,
+        title VARCHAR(255) NOT NULL,
+        content TEXT NOT NULL,
+        type VARCHAR(50) NOT NULL,
+        embedding vector(1536),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    
     // Migration: Add new columns to symbols table if they don't exist
     await client.query(`
       ALTER TABLE symbols ADD COLUMN IF NOT EXISTS length INTEGER NOT NULL DEFAULT 0
