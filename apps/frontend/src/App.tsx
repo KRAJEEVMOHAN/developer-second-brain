@@ -72,6 +72,71 @@ function TreeNodeView({ node, level = 0, onFileClick }: { node: TreeNode, level?
   );
 }
 
+function renderMarkdown(text: string) {
+  if (!text) return null;
+
+  // Split by code blocks: ```typescript ... ```
+  const parts = text.split(/(```[\s\S]*?```)/g);
+
+  return parts.map((part, index) => {
+    if (part.startsWith('```')) {
+      const match = part.match(/```(\w+)?\n([\s\S]*?)```/);
+      const code = match ? match[2] : part.slice(3, -3);
+
+      return (
+        <pre 
+          key={index} 
+          style={{ 
+            backgroundColor: 'var(--bg-primary)', 
+            padding: '1rem', 
+            borderRadius: '6px', 
+            border: '1px solid var(--border-color)', 
+            overflowX: 'auto',
+            margin: '0.75rem 0',
+            fontFamily: 'var(--font-mono)',
+            fontSize: '0.85rem'
+          }}
+        >
+          <code style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>{code}</code>
+        </pre>
+      );
+    } else {
+      const lines = part.split('\n');
+      return lines.map((line, lIdx) => {
+        if (line.startsWith('###')) {
+          return <h3 key={`${index}-${lIdx}`} style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>{line.replace(/^###+\s*/, '')}</h3>;
+        }
+        if (line.startsWith('####')) {
+          return <h4 key={`${index}-${lIdx}`} style={{ color: 'var(--text-primary)', marginTop: '1rem', marginBottom: '0.5rem' }}>{line.replace(/^####+\s*/, '')}</h4>;
+        }
+        if (line.startsWith('#####')) {
+          return <h5 key={`${index}-${lIdx}`} style={{ color: 'var(--text-primary)', fontWeight: 'bold', marginTop: '0.75rem', marginBottom: '0.25rem' }}>{line.replace(/^#####+\s*/, '')}</h5>;
+        }
+        const boldRegex = /\*\*([^*]+)\*\*/g;
+        if (boldRegex.test(line)) {
+          const elements = [];
+          let lastIdx = 0;
+          boldRegex.lastIndex = 0;
+          let match;
+          while ((match = boldRegex.exec(line)) !== null) {
+            elements.push(line.substring(lastIdx, match.index));
+            elements.push(<strong key={match.index} style={{ color: 'var(--text-primary)' }}>{match[1]}</strong>);
+            lastIdx = boldRegex.lastIndex;
+          }
+          elements.push(line.substring(lastIdx));
+          return <p key={`${index}-${lIdx}`} style={{ margin: '0.35rem 0', lineHeight: '1.5' }}>{elements}</p>;
+        }
+
+        return line.trim() ? (
+          <p key={`${index}-${lIdx}`} style={{ margin: '0.35rem 0', lineHeight: '1.5' }}>{line}</p>
+        ) : (
+          <div key={`${index}-${lIdx}`} style={{ height: '0.5rem' }}></div>
+        );
+      });
+    }
+  });
+}
+
 function App() {
   const [view, setView] = useState<'dashboard' | 'chat'>('dashboard')
   const [showImportModal, setShowImportModal] = useState(false)
@@ -91,6 +156,11 @@ function App() {
   const [selectedFileContent, setSelectedFileContent] = useState<string | null>(null)
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
   const [showGraph, setShowGraph] = useState(false)
+  const [circularDependencies, setCircularDependencies] = useState<any[]>([])
+  const [deadCode, setDeadCode] = useState<{ unusedFiles: string[], unusedSymbols: any[] } | null>(null)
+  const [isLoadingRefactor, setIsLoadingRefactor] = useState(false)
+  const [activeRefactorSuggestion, setActiveRefactorSuggestion] = useState<string | null>(null)
+  const [refactoringCycleIndex, setRefactoringCycleIndex] = useState<number | null>(null)
 
   const [memories, setMemories] = useState<any[]>([])
   const [searchMemoryQuery, setSearchMemoryQuery] = useState('')
@@ -105,6 +175,29 @@ function App() {
       .then(res => res.json())
       .then(data => setSelectedFileContent(data.content))
       .catch(err => console.error('Failed to fetch file content:', err))
+  }
+
+  const handleSuggestRefactor = (cyclePath: string[], index: number) => {
+    setIsLoadingRefactor(true)
+    setRefactoringCycleIndex(index)
+    setActiveRefactorSuggestion("")
+
+    fetch(`${API_URL}/repositories/${activeRepo?.id}/circular-dependencies/refactor`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: cyclePath })
+    })
+      .then(res => res.json())
+      .then(data => {
+        setActiveRefactorSuggestion(data.suggestion)
+      })
+      .catch(err => {
+        console.error('Failed to get refactoring suggestions:', err)
+        setActiveRefactorSuggestion("Failed to load suggestions. Please check if backend is running.")
+      })
+      .finally(() => {
+        setIsLoadingRefactor(false)
+      })
   }
 
   const handleSearchMemory = (query: string, repoId = activeRepo?.id) => {
@@ -162,6 +255,25 @@ function App() {
       const target = rel.target_file.split(/[\\\/]/).pop() || '';
       str += `  ${source.replace(/[^a-zA-Z0-9]/g, '_')}["${source}"] -->|${rel.symbol_name}| ${target.replace(/[^a-zA-Z0-9]/g, '_')}["${target}"]\n`;
     });
+
+    // Highlight circular dependency nodes in red
+    const cycleNodes = new Set<string>();
+    if (circularDependencies && circularDependencies.length > 0) {
+      circularDependencies.forEach(cycle => {
+        if (cycle.path) {
+          cycle.path.forEach((filePath: string) => {
+            const baseName = filePath.split(/[\\\/]/).pop() || filePath;
+            cycleNodes.add(baseName.replace(/[^a-zA-Z0-9]/g, '_'));
+          });
+        }
+      });
+    }
+
+    if (cycleNodes.size > 0) {
+      str += `  classDef cycleNode fill:#3f1f1f,stroke:#ef4444,stroke-width:2px,color:#fee2e2;\n`;
+      str += `  class ${Array.from(cycleNodes).join(',')} cycleNode;\n`;
+    }
+
     return str;
   };
 
@@ -183,7 +295,7 @@ function App() {
         }
       }
     }
-  }, [showGraph, relationships]);
+  }, [showGraph, relationships, circularDependencies]);
 
   useEffect(() => {
     // Fetch repositories on mount
@@ -260,6 +372,8 @@ function App() {
   const openChat = (repo: typeof repos[0]) => {
     setActiveRepo(repo)
     setView('chat')
+    setCircularDependencies([])
+    setDeadCode(null)
     setChatMessages([
       { role: 'ai', content: `Hello! I have indexed the <strong>${repo.name}</strong> repository. How can I help you understand the codebase today?`, citations: [] }
     ])
@@ -290,6 +404,18 @@ function App() {
       .then(res => res.json())
       .then(data => setMemories(data))
       .catch(err => console.error('Failed to fetch memories:', err))
+
+    // Fetch circular dependencies for the active repository
+    fetch(`${API_URL}/repositories/${repo.id}/circular-dependencies`)
+      .then(res => res.json())
+      .then(data => setCircularDependencies(data))
+      .catch(err => console.error('Failed to fetch circular dependencies:', err))
+
+    // Fetch dead code for the active repository
+    fetch(`${API_URL}/repositories/${repo.id}/dead-code`)
+      .then(res => res.json())
+      .then(data => setDeadCode(data))
+      .catch(err => console.error('Failed to fetch dead code:', err))
   }
 
   return (
@@ -568,6 +694,142 @@ function App() {
                         )}
                       </div>
 
+                      <div>
+                        <h4 style={{ color: '#ef4444', marginBottom: '0.5rem' }}>🔄 Circular Dependencies</h4>
+                        {circularDependencies && circularDependencies.length > 0 ? (
+                          circularDependencies.map((cycle, idx) => (
+                            <div key={idx} style={{ fontSize: '0.85rem', padding: '0.75rem', backgroundColor: 'var(--bg-secondary)', borderRadius: '6px', border: '1px solid #ef4444', marginBottom: '0.5rem', boxShadow: '0 2px 8px rgba(239, 68, 68, 0.1)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                                <span style={{ fontWeight: 'bold', color: '#ef4444' }}>Cycle #{idx + 1}</span>
+                                <button 
+                                  className="btn btn-primary" 
+                                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                                  onClick={() => handleSuggestRefactor(cycle.path, idx + 1)}
+                                >
+                                  💡 Refactor
+                                </button>
+                              </div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                {cycle.path.map((filePath: string, fIdx: number) => {
+                                  const baseName = filePath.split(/[\\\/]/).pop() || filePath;
+                                  const isLast = fIdx === cycle.path.length - 1;
+                                  const symbol = !isLast && cycle.symbols ? cycle.symbols[fIdx] : null;
+
+                                  return (
+                                    <div key={fIdx}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <span 
+                                          style={{ 
+                                            color: 'var(--text-primary)', 
+                                            cursor: 'pointer',
+                                            textDecoration: 'underline',
+                                            textDecorationStyle: 'dotted'
+                                          }} 
+                                          onClick={() => handleFileClick(filePath)}
+                                          title={`Click to view ${filePath}`}
+                                        >
+                                          {baseName}
+                                        </span>
+                                      </div>
+                                      {!isLast && (
+                                        <div style={{ paddingLeft: '12px', borderLeft: '2px dashed #ef4444', margin: '4px 0 4px 6px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                                          importing <span style={{ color: 'var(--text-primary)', fontWeight: '500' }}>{symbol}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>None found! Great job.</p>
+                        )}
+                      </div>
+
+                      <div>
+                        <h4 style={{ color: '#f59e0b', marginBottom: '0.5rem' }}>🗑️ Dead Code & Unused Symbols</h4>
+                        {deadCode ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                            {/* Unused Files */}
+                            <div>
+                              <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                                Unused Files ({deadCode.unusedFiles.length})
+                              </div>
+                              {deadCode.unusedFiles.length > 0 ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                  {deadCode.unusedFiles.map((filePath, idx) => (
+                                    <div 
+                                      key={idx} 
+                                      style={{ 
+                                        fontSize: '0.85rem', 
+                                        padding: '0.5rem', 
+                                        backgroundColor: 'var(--bg-secondary)', 
+                                        borderRadius: '4px', 
+                                        cursor: 'pointer',
+                                        textDecoration: 'underline',
+                                        textDecorationStyle: 'dotted'
+                                      }}
+                                      onClick={() => handleFileClick(filePath)}
+                                      title={`Click to view ${filePath}`}
+                                    >
+                                      {filePath}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0 }}>No unused files found.</p>
+                              )}
+                            </div>
+
+                            {/* Unused Symbols */}
+                            <div>
+                              <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                                Unused Symbols ({deadCode.unusedSymbols.length})
+                              </div>
+                              {deadCode.unusedSymbols.length > 0 ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                  {deadCode.unusedSymbols.map((sym, idx) => (
+                                    <div 
+                                      key={idx} 
+                                      style={{ 
+                                        fontSize: '0.85rem', 
+                                        padding: '0.5rem', 
+                                        backgroundColor: 'var(--bg-secondary)', 
+                                        borderRadius: '4px' 
+                                      }}
+                                    >
+                                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                        <strong>{sym.name}</strong>
+                                        <span style={{ fontSize: '0.75rem', opacity: 0.7, textTransform: 'capitalize' }}>{sym.kind}</span>
+                                      </div>
+                                      <div 
+                                        style={{ 
+                                          color: 'var(--accent)', 
+                                          fontSize: '0.75rem', 
+                                          cursor: 'pointer',
+                                          textDecoration: 'underline',
+                                          textDecorationStyle: 'dotted',
+                                          marginTop: '0.15rem'
+                                        }}
+                                        onClick={() => handleFileClick(sym.filePath)}
+                                        title={`Click to view ${sym.filePath}`}
+                                      >
+                                        in {sym.filePath}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0 }}>No unused symbols found.</p>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Analyzing dead code...</p>
+                        )}
+                      </div>
+
                     </div>
                   </div>
                 ) : (
@@ -712,6 +974,65 @@ function App() {
                 Cancel
               </button>
               <button className="btn btn-primary" onClick={handleCreateMemory}>Save Memory</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Refactor Suggestions Modal */}
+      {(isLoadingRefactor || activeRefactorSuggestion !== null) && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '800px', width: '90%', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '1rem' }}>
+              <h2 style={{ margin: 0 }}>💡 AI Refactoring Advice (Cycle #{refactoringCycleIndex})</h2>
+              <button 
+                className="btn btn-text" 
+                style={{ fontSize: '1.25rem', padding: '0.25rem' }} 
+                onClick={() => {
+                  setActiveRefactorSuggestion(null)
+                  setRefactoringCycleIndex(null)
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div style={{ overflowY: 'auto', flex: 1, padding: '1rem 0', color: 'var(--text-secondary)' }}>
+              {isLoadingRefactor ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', gap: '1rem' }}>
+                  <div className="spinner" style={{
+                    width: '40px',
+                    height: '40px',
+                    border: '4px solid rgba(239, 68, 68, 0.1)',
+                    borderTop: '4px solid #ef4444',
+                    borderRadius: '50%',
+                    animation: 'spin 1s linear infinite'
+                  }}></div>
+                  <style>{`
+                    @keyframes spin {
+                      0% { transform: rotate(0deg); }
+                      100% { transform: rotate(360deg); }
+                    }
+                  `}</style>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: '500' }}>Analyzing cycle and generating recommendations...</span>
+                </div>
+              ) : (
+                <div className="markdown-body" style={{ textAlign: 'left' }}>
+                  {renderMarkdown(activeRefactorSuggestion || "")}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
+              <button 
+                className="btn btn-secondary" 
+                onClick={() => {
+                  setActiveRefactorSuggestion(null)
+                  setRefactoringCycleIndex(null)
+                }}
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
